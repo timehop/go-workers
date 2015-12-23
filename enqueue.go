@@ -91,7 +91,7 @@ func EnqueueWithOptions(queue, class string, args interface{}, opts EnqueueOptio
 	if err != nil {
 		return "", 0, err
 	}
-	queueSize, err := redis.Int(conn.Do("rpush", queueKey(queue), bytes))
+	queueSize, err := redis.Int(conn.Do("lpush", queueKey(queue), bytes))
 	if err != nil {
 		return "", 0, err
 	}
