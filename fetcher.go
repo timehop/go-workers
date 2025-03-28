@@ -2,6 +2,7 @@ package workers
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/garyburd/redigo/redis"
@@ -23,17 +24,17 @@ type fetch struct {
 	messages chan *Msg
 	stop     chan bool
 	exit     chan bool
-	closed   bool
+	closed   atomic.Bool
 }
 
 func NewFetch(queue string, messages chan *Msg, ready chan bool) Fetcher {
+
 	return &fetch{
-		queue,
-		ready,
-		messages,
-		make(chan bool),
-		make(chan bool),
-		false,
+		queue:    queue,
+		ready:    ready,
+		messages: messages,
+		stop:     make(chan bool),
+		exit:     make(chan bool),
 	}
 }
 
@@ -87,7 +88,7 @@ func (f *fetch) Fetch() {
 		case message := <-messages:
 			f.sendMessage(message)
 		case <-f.stop:
-			f.closed = true
+			f.closed.Store(true)
 			f.exit <- true
 			break
 		}
@@ -125,7 +126,7 @@ func (f *fetch) Close() {
 }
 
 func (f *fetch) Closed() bool {
-	return f.closed
+	return f.closed.Load()
 }
 
 func (f *fetch) inprogressMessages() []string {
