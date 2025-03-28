@@ -1,0 +1,30 @@
+name: Go Test
+on:
+  pull_request:
+  push:
+    branches:
+      - 'master'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    container:
+      image: golang:1.22
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test 
+        run: go test -v -race ./...
