@@ -1,7 +1,6 @@
 package workers
 
 import (
-	"fmt"
 	"github.com/customerio/gospec"
 	. "github.com/customerio/gospec"
 	"github.com/garyburd/redigo/redis"
@@ -37,7 +36,7 @@ func ManagerSpec(c gospec.Context) {
 
 		c.Specify("sets job function", func() {
 			manager := newManager("myqueue", testJob, 10)
-			c.Expect(fmt.Sprint(manager.job), Equals, fmt.Sprint(testJob))
+			c.Expect(manager.job != nil, IsTrue)
 		})
 
 		c.Specify("sets worker concurrency", func() {

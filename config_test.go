@@ -1,6 +1,8 @@
 package workers
 
 import (
+	"os"
+
 	"github.com/customerio/gospec"
 	. "github.com/customerio/gospec"
 )
@@ -22,7 +24,7 @@ func ConfigSpec(c gospec.Context) {
 		c.Expect(Config.Pool.MaxIdle, Equals, 1)
 
 		Configure(map[string]string{
-			"server":  "localhost:6379",
+			"server":  redisURL(),
 			"process": "1",
 			"pool":    "20",
 		})
@@ -34,7 +36,7 @@ func ConfigSpec(c gospec.Context) {
 		c.Expect(Config.processId, Equals, "1")
 
 		Configure(map[string]string{
-			"server":  "localhost:6379",
+			"server":  redisURL(),
 			"process": "2",
 		})
 
@@ -51,7 +53,7 @@ func ConfigSpec(c gospec.Context) {
 
 	c.Specify("requires a process parameter", func() {
 		err := recoverOnPanic(func() {
-			Configure(map[string]string{"server": "localhost:6379"})
+			Configure(map[string]string{"server": redisURL()})
 		})
 
 		c.Expect(err, Equals, "Configure requires a 'process' option, which uniquely identifies this instance")
@@ -61,7 +63,7 @@ func ConfigSpec(c gospec.Context) {
 		c.Expect(Config.Namespace, Equals, "")
 
 		Configure(map[string]string{
-			"server":    "localhost:6379",
+			"server":    redisURL(),
 			"process":   "1",
 			"namespace": "prod",
 		})
@@ -71,7 +73,7 @@ func ConfigSpec(c gospec.Context) {
 
 	c.Specify("defaults poll interval to 15 seconds", func() {
 		Configure(map[string]string{
-			"server":  "localhost:6379",
+			"server":  redisURL(),
 			"process": "1",
 		})
 
@@ -80,11 +82,19 @@ func ConfigSpec(c gospec.Context) {
 
 	c.Specify("allows customization of poll interval", func() {
 		Configure(map[string]string{
-			"server":        "localhost:6379",
+			"server":        redisURL(),
 			"process":       "1",
 			"poll_interval": "1",
 		})
 
 		c.Expect(Config.PollInterval, Equals, 1)
 	})
+}
+
+func redisURL() string {
+	url := os.Getenv("REDIS_URL")
+	if url == "" {
+		url = "localhost:6379"
+	}
+	return url
 }

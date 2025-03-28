@@ -1,0 +1,15 @@
+services:
+  test:
+    build:
+      context: .
+    command: ["go", "test", "-v", "-race", "./..."]
+    volumes:
+      - ./:/go/src/go-workers
+    working_dir: /go/src/go-workers
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis:6379
+
+  redis:
+    image: redis:6.2.6
