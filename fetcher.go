@@ -22,8 +22,8 @@ type fetch struct {
 	queue    string
 	ready    chan bool
 	messages chan *Msg
-	stop     chan bool
-	exit     chan bool
+	stop     chan struct{}
+	exit     chan struct{}
 	closed   atomic.Bool
 }
 
@@ -33,8 +33,8 @@ func NewFetch(queue string, messages chan *Msg, ready chan bool) Fetcher {
 		queue:    queue,
 		ready:    ready,
 		messages: messages,
-		stop:     make(chan bool),
-		exit:     make(chan bool),
+		stop:     make(chan struct{}),
+		exit:     make(chan struct{}),
 	}
 }
 
@@ -46,51 +46,39 @@ func (f *fetch) processOldMessages() {
 	messages := f.inprogressMessages()
 
 	for _, message := range messages {
-		<-f.Ready()
-		f.sendMessage(message)
+		select {
+		case <-f.stop:
+			return
+		case <-f.Ready():
+			f.sendMessage(message)
+		}
 	}
 }
 
 func (f *fetch) Fetch() {
-	messages := make(chan string)
+	defer close(f.exit)
 
 	f.processOldMessages()
 
-	go (func(c chan string) {
-		for {
-			if f.Closed() {
-				break
-			}
-
-			<-f.Ready()
-
-			(func() {
-				conn := Config.Pool.Get()
-				defer conn.Close()
-
-				message, err := redis.String(conn.Do("brpoplpush", f.queue, f.inprogressQueue(), 1))
-
-				if err != nil {
-					// If redis returns null, the queue is empty. Just ignore the error.
-					if err.Error() != "redigo: nil returned" {
-						Logger.Println("ERR: ", err)
-						time.Sleep(1 * time.Second)
-					}
-				} else {
-					c <- message
-				}
-			})()
-		}
-	})(messages)
-
 	for {
 		select {
-		case message := <-messages:
-			f.sendMessage(message)
 		case <-f.stop:
 			f.closed.Store(true)
-			f.exit <- true
-			break
+			return
+		case <-f.Ready():
+			conn := Config.Pool.Get()
+			message, err := redis.String(conn.Do("brpoplpush", f.queue, f.inprogressQueue(), 1))
+			conn.Close()
+
+			if err != nil {
+				if err.Error() != "redigo: nil returned" {
+					Logger.Println("ERR: ", err)
+					time.Sleep(1 * time.Second)
+				}
+				continue
+			}
+
+			f.sendMessage(message)
 		}
 	}
 }
@@ -121,8 +109,12 @@ func (f *fetch) Ready() chan bool {
 }
 
 func (f *fetch) Close() {
-	f.stop <- true
-	<-f.exit
+	select {
+	case <-f.stop:
+		// Nothing to do: already closed
+	default:
+		close(f.stop) // Safe if this gets called multiple times
+	}
 }
 
 func (f *fetch) Closed() bool {
