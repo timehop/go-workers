@@ -24,9 +24,13 @@ type EnqueueData struct {
 }
 
 type EnqueueOptions struct {
-	RetryCount int     `json:"retry_count,omitempty"`
-	Retry      bool    `json:"retry,omitempty"`
-	At         float64 `json:"at,omitempty"`
+	RetryCount   int     `json:"retry_count,omitempty"`
+	RetryEnabled bool    `json:"retry_enabled,omitempty"`
+	MaxRetries   int     `json:"max_retries,omitempty"`
+	At           float64 `json:"at,omitempty"`
+
+	// Legacy field for backward compatibility with deserializers that expect it.
+	Retry bool `json:"retry,omitempty"`
 }
 
 func generateJid() string {
@@ -61,6 +65,9 @@ func EnqueueAt(queue, class string, at time.Time, args interface{}) (string, int
 // in the scheduled jobs queue.
 func EnqueueWithOptions(queue, class string, args interface{}, opts EnqueueOptions) (string, int, error) {
 	now := nowToSecondsWithNanoPrecision()
+	if opts.RetryEnabled {
+		opts.Retry = true // For legacy compatibility
+	}
 	data := EnqueueData{
 		Queue:          queue,
 		Class:          class,
