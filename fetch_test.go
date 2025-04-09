@@ -1,7 +1,8 @@
 package workers
 
 import (
-	"github.com/customerio/gospec"
+	"time"
+
 	. "github.com/customerio/gospec"
 	"github.com/garyburd/redigo/redis"
 )
@@ -13,12 +14,15 @@ func buildFetch(queue string) Fetcher {
 	return fetch
 }
 
-func FetchSpec(c gospec.Context) {
+func FetchSpec(c Context) {
 	c.Specify("Config.Fetch", func() {
 		c.Specify("it returns an instance of fetch with queue", func() {
-			fetch := buildFetch("fetchQueue1")
-			c.Expect(fetch.Queue(), Equals, "queue:fetchQueue1")
-			fetch.Close()
+			f := buildFetch("fetchQueue1")
+			defer func() {
+				f.Close()
+				<-f.(*fetch).exit
+			}()
+			c.Expect(f.Queue(), Equals, "queue:fetchQueue1")
 		})
 	})
 
@@ -26,61 +30,74 @@ func FetchSpec(c gospec.Context) {
 		message, _ := NewMsg("{\"foo\":\"bar\"}")
 
 		c.Specify("it puts messages from the queues on the messages channel", func() {
-			fetch := buildFetch("fetchQueue2")
+			f := buildFetch("fetchQueue2")
+			// Close once we're done
+			defer func() {
+				f.Close()
+				<-f.(*fetch).exit
+			}()
 
 			conn := Config.Pool.Get()
 			defer conn.Close()
 
 			conn.Do("lpush", "queue:fetchQueue2", message.ToJson())
 
-			fetch.Ready() <- true
-			message := <-fetch.Messages()
+			f.Ready() <- true
 
-			c.Expect(message, Equals, message)
+			select {
+			case received := <-f.Messages():
+				c.Expect(received.OriginalJson(), Equals, message.ToJson())
+			case <-time.After(2 * time.Second):
+				c.Expect("timed out waiting for message", Equals, "") // forces a failure
+			}
 
 			len, _ := redis.Int(conn.Do("llen", "queue:fetchQueue2"))
 			c.Expect(len, Equals, 0)
-
-			fetch.Close()
 		})
 
 		c.Specify("places in progress messages on private queue", func() {
-			fetch := buildFetch("fetchQueue3")
+			f := buildFetch("fetchQueue3")
+			// Close once we're done
+			defer func() {
+				f.Close()
+				<-f.(*fetch).exit
+			}()
 
 			conn := Config.Pool.Get()
 			defer conn.Close()
 
 			conn.Do("lpush", "queue:fetchQueue3", message.ToJson())
 
-			fetch.Ready() <- true
-			<-fetch.Messages()
+			f.Ready() <- true
+			<-f.Messages()
 
 			len, _ := redis.Int(conn.Do("llen", "queue:fetchQueue3:1:inprogress"))
 			c.Expect(len, Equals, 1)
 
 			messages, _ := redis.Strings(conn.Do("lrange", "queue:fetchQueue3:1:inprogress", 0, -1))
 			c.Expect(messages[0], Equals, message.ToJson())
-
-			fetch.Close()
 		})
 
 		c.Specify("removes in progress message when acknowledged", func() {
-			fetch := buildFetch("fetchQueue4")
+			f := buildFetch("fetchQueue4")
+			// Close once we're done
+			defer func() {
+				f.Close()
+				<-f.(*fetch).exit
+			}()
 
 			conn := Config.Pool.Get()
 			defer conn.Close()
 
 			conn.Do("lpush", "queue:fetchQueue4", message.ToJson())
 
-			fetch.Ready() <- true
-			<-fetch.Messages()
+			f.Ready() <- true
+			<-f.Messages()
 
-			fetch.Acknowledge(message)
+			f.Acknowledge(message)
 
 			len, _ := redis.Int(conn.Do("llen", "queue:fetchQueue4:1:inprogress"))
 			c.Expect(len, Equals, 0)
-
-			fetch.Close()
 		})
 
 		c.Specify("removes in progress message when serialized differently", func() {
@@ -89,22 +106,25 @@ func FetchSpec(c gospec.Context) {
 
 			c.Expect(json, Not(Equals), message.ToJson())
 
-			fetch := buildFetch("fetchQueue5")
+			f := buildFetch("fetchQueue5")
+			// Close once we're done
+			defer func() {
+				f.Close()
+				<-f.(*fetch).exit
+			}()
 
 			conn := Config.Pool.Get()
 			defer conn.Close()
 
 			conn.Do("lpush", "queue:fetchQueue5", json)
 
-			fetch.Ready() <- true
-			<-fetch.Messages()
+			f.Ready() <- true
+			<-f.Messages()
 
-			fetch.Acknowledge(message)
+			f.Acknowledge(message)
 
 			len, _ := redis.Int(conn.Do("llen", "queue:fetchQueue5:1:inprogress"))
 			c.Expect(len, Equals, 0)
-
-			fetch.Close()
 		})
 
 		c.Specify("refires any messages left in progress from prior instance", func() {
@@ -114,27 +134,32 @@ func FetchSpec(c gospec.Context) {
 			conn := Config.Pool.Get()
 			defer conn.Close()
 
+			// Create 2 message in progress
 			conn.Do("lpush", "queue:fetchQueue6:1:inprogress", message.ToJson())
 			conn.Do("lpush", "queue:fetchQueue6:1:inprogress", message2.ToJson())
+			// Create a third, new message
 			conn.Do("lpush", "queue:fetchQueue6", message3.ToJson())
 
-			fetch := buildFetch("fetchQueue6")
+			f := buildFetch("fetchQueue6")
+			// Close once we're done
+			defer func() {
+				f.Close()
+				<-f.(*fetch).exit
+			}()
 
-			fetch.Ready() <- true
-			c.Expect(<-fetch.Messages(), Equals, message2)
-			fetch.Ready() <- true
-			c.Expect(<-fetch.Messages(), Equals, message)
-			fetch.Ready() <- true
-			c.Expect(<-fetch.Messages(), Equals, message3)
+			f.Ready() <- true
+			c.Expect(<-f.Messages(), Equals, message2)
+			f.Ready() <- true
+			c.Expect(<-f.Messages(), Equals, message)
+			f.Ready() <- true
+			c.Expect(<-f.Messages(), Equals, message3)
 
-			fetch.Acknowledge(message)
-			fetch.Acknowledge(message2)
-			fetch.Acknowledge(message3)
+			f.Acknowledge(message)
+			f.Acknowledge(message2)
+			f.Acknowledge(message3)
 
 			len, _ := redis.Int(conn.Do("llen", "queue:fetchQueue6:1:inprogress"))
 			c.Expect(len, Equals, 0)
-
-			fetch.Close()
 		})
 	})
 }
