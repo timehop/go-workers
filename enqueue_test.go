@@ -2,13 +2,13 @@ package workers
 
 import (
 	"encoding/json"
+	"fmt"
 
-	"github.com/customerio/gospec"
 	. "github.com/customerio/gospec"
 	"github.com/garyburd/redigo/redis"
 )
 
-func EnqueueSpec(c gospec.Context) {
+func EnqueueSpec(c Context) {
 	was := Config.Namespace
 	Config.Namespace = "prod:"
 
@@ -97,6 +97,27 @@ func EnqueueSpec(c gospec.Context) {
 				_, queueSize, _ := Enqueue("enqueue8", "Compare", []string{"foo", "bar"})
 				c.Expect(queueSize, Equals, i)
 			}
+		})
+
+		c.Specify("ensures legacy compatibility with RetryEnabled and retry", func() {
+			EnqueueWithOptions("enqueue9", "Compare", []string{"foo", "bar"}, EnqueueOptions{RetryCount: 13, RetryEnabled: true})
+
+			bytes, _ := redis.Bytes(conn.Do("lpop", "prod:queue:enqueue9"))
+			var result map[string]interface{}
+			json.Unmarshal(bytes, &result)
+			fmt.Println(result)
+			c.Expect(result["class"], Equals, "Compare")
+
+			// Should be set through RetryEnabled
+			retry := result["retry"].(bool)
+			c.Expect(retry, Equals, true)
+
+			// RetryEnabled should be set
+			retryEnabled := result["retry_enabled"].(bool)
+			c.Expect(retryEnabled, Equals, true)
+
+			retryCount := int(result["retry_count"].(float64))
+			c.Expect(retryCount, Equals, 13)
 		})
 	})
 
