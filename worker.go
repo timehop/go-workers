@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"sync"
 	"time"
 )
 
@@ -10,6 +11,7 @@ type worker struct {
 	exit       chan bool
 	currentMsg *Msg
 	startedAt  int64
+	mu         sync.RWMutex
 }
 
 func (w *worker) start() {
@@ -25,14 +27,18 @@ func (w *worker) work(messages chan *Msg) {
 	for {
 		select {
 		case message := <-messages:
+			w.mu.Lock()
 			w.startedAt = time.Now().UTC().Unix()
+			w.mu.Unlock()
 			w.currentMsg = message
 
 			if w.process(message) {
 				w.manager.confirm <- message
 			}
 
+			w.mu.Lock()
 			w.startedAt = 0
+			w.mu.Unlock()
 			w.currentMsg = nil
 		case w.manager.fetch.Ready() <- true:
 			// Signaled to fetcher that we're
@@ -57,9 +63,11 @@ func (w *worker) process(message *Msg) (acknowledge bool) {
 }
 
 func (w *worker) processing() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
 	return w.startedAt > 0
 }
 
 func newWorker(m *manager) *worker {
-	return &worker{m, make(chan bool), make(chan bool), nil, 0}
+	return &worker{m, make(chan bool), make(chan bool), nil, 0, sync.RWMutex{}}
 }
