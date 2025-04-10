@@ -41,9 +41,10 @@ func Configure(options map[string]string) {
 	}
 
 	poolSize, _ = strconv.Atoi(options["pool"])
+	processID := options["process"]
 
 	Config = &config{
-		options["process"],
+		processID,
 		namespace,
 		pollInterval,
 		&redis.Pool{
@@ -74,7 +75,7 @@ func Configure(options map[string]string) {
 			},
 		},
 		func(queue string) Fetcher {
-			return NewFetch(queue, make(chan *Msg), make(chan bool))
+			return NewFetch(queue, processID, make(chan *Msg), make(chan bool))
 		},
 	}
 }
