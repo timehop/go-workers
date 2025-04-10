@@ -13,8 +13,8 @@ type manager struct {
 	workers     []*worker
 	mu          sync.Mutex
 	confirm     chan *Msg
-	stop        chan bool
-	exit        chan bool
+	stop        chan struct{}
+	exit        chan struct{}
 	mids        *Middlewares
 	*sync.WaitGroup
 }
@@ -40,7 +40,13 @@ func (m *manager) quit() {
 	}
 	m.mu.Unlock()
 
-	m.stop <- true
+	select {
+	case <-m.stop:
+		// Already closed
+	default:
+		close(m.stop)
+	}
+
 	<-m.exit
 
 	m.Done()
@@ -58,8 +64,8 @@ func (m *manager) manage() {
 		case message := <-m.confirm:
 			m.fetch.Acknowledge(message)
 		case <-m.stop:
-			m.exit <- true
-			break
+			close(m.exit)
+			return
 		}
 	}
 }
@@ -107,8 +113,8 @@ func newManager(queue string, job jobFunc, concurrency int, mids ...Action) *man
 		make([]*worker, concurrency),
 		sync.Mutex{},
 		make(chan *Msg),
-		make(chan bool),
-		make(chan bool),
+		make(chan struct{}),
+		make(chan struct{}),
 		customMids,
 		&sync.WaitGroup{},
 	}
