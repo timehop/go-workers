@@ -1,13 +1,13 @@
 package workers
 
 import (
-	"github.com/customerio/gospec"
+	"time"
+
 	. "github.com/customerio/gospec"
 	"github.com/garyburd/redigo/redis"
-	"time"
 )
 
-func MiddlewareRetrySpec(c gospec.Context) {
+func MiddlewareRetrySpec(c Context) {
 	var panicingJob = (func(message *Msg) {
 		panic("AHHHH")
 	})
@@ -185,6 +185,110 @@ func MiddlewareRetrySpec(c gospec.Context) {
 
 		count, _ := redis.Int(conn.Do("zcard", "prod:"+RETRY_KEY))
 		c.Expect(count, Equals, 0)
+	})
+
+	c.Specify("retries when using new retry format and under max_retries", func() {
+		message, _ := NewMsg(`{
+			"jid":"2",
+			"retry_enabled":true,
+			"retry_count":2,
+			"max_retries":5
+		}`)
+
+		wares.call("myqueue", message, func() {
+			worker.process(message)
+		})
+
+		conn := Config.Pool.Get()
+		defer conn.Close()
+
+		count, _ := redis.Int(conn.Do("zcard", "prod:"+RETRY_KEY))
+		c.Expect(count, Equals, 1)
+	})
+
+	c.Specify("doesn't retry when using new retry format and at max default retries", func() {
+		message, _ := NewMsg(`{
+			"jid":"2",
+			"retry_enabled":true,
+			"retry_count":25,
+		}`)
+
+		wares.call("myqueue", message, func() {
+			worker.process(message)
+		})
+
+		conn := Config.Pool.Get()
+		defer conn.Close()
+
+		count, _ := redis.Int(conn.Do("zcard", "prod:"+RETRY_KEY))
+		c.Expect(count, Equals, 0)
+	})
+
+	c.Specify("doesn't retry when using new retry format and at custom max_retries", func() {
+		message, _ := NewMsg(`{
+			"jid":"2",
+			"retry_enabled":true,
+			"retry_count":5,
+			"max_retries":5
+		}`)
+
+		wares.call("myqueue", message, func() {
+			worker.process(message)
+		})
+
+		conn := Config.Pool.Get()
+		defer conn.Close()
+
+		count, _ := redis.Int(conn.Do("zcard", "prod:"+RETRY_KEY))
+		c.Expect(count, Equals, 0)
+	})
+
+	c.Specify("upgrades legacy retry format to retry_enabled and max_retries", func() {
+		message, _ := NewMsg(`{
+			"jid":"2",
+			"retry":7,
+			"retry_count":3
+		}`)
+
+		wares.call("myqueue", message, func() {
+			worker.process(message)
+		})
+
+		conn := Config.Pool.Get()
+		defer conn.Close()
+
+		retries, _ := redis.Strings(conn.Do("zrange", "prod:"+RETRY_KEY, 0, 1))
+		message, _ = NewMsg(retries[0])
+
+		retryEnabled, _ := message.Get("retry_enabled").Bool()
+		maxRetries, _ := message.Get("max_retries").Int()
+
+		c.Expect(retryEnabled, Equals, true)
+		c.Expect(maxRetries, Equals, 7)
+	})
+
+	c.Specify("upgrades legacy retry format when retry is boolean", func() {
+		message, _ := NewMsg(`{
+		"jid":"2",
+		"retry":true,
+		"retry_count":2
+	}`)
+
+		wares.call("myqueue", message, func() {
+			worker.process(message)
+		})
+
+		conn := Config.Pool.Get()
+		defer conn.Close()
+
+		retries, _ := redis.Strings(conn.Do("zrange", "prod:"+RETRY_KEY, 0, 1))
+		message, _ = NewMsg(retries[0])
+
+		retryEnabled, _ := message.Get("retry_enabled").Bool()
+		maxRetries, _ := message.Get("max_retries").Int()
+
+		c.Expect(retryEnabled, Equals, true)
+		c.Expect(maxRetries, Equals, DEFAULT_MAX_RETRY) // default used when only retry: true
 	})
 
 	Config.Namespace = was
