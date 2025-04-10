@@ -56,33 +56,55 @@ func (r *MiddlewareRetry) Call(queue string, message *Msg, next func() bool) (ac
 }
 
 func retry(message *Msg) bool {
-	retry := false
+	retryEnabled := false
 	max := DEFAULT_MAX_RETRY
 
-	if param, err := message.Get("retry").Bool(); err == nil {
-		retry = param
-	} else if param, err := message.Get("retry").Int(); err == nil {
+	// Attempt to use the new format
+	if param, err := message.Get("retry_enabled").Bool(); err == nil {
+		retryEnabled = param
+	}
+	if param, err := message.Get("max_retries").Int(); err == nil {
 		max = param
-		retry = true
+	}
+
+	// TODO: Add FF to eventually migrate fully to new retry format?
+	// Backward compatibility: fall back to legacy "retry"
+	if _, ok := message.CheckGet("retry_enabled"); !ok {
+		if param, err := message.Get("retry").Bool(); err == nil {
+			retryEnabled = param
+		} else if param, err := message.Get("retry").Int(); err == nil {
+			retryEnabled = true
+			max = param
+		}
+
+		message.Set("retry_enabled", retryEnabled)
+		message.Set("max_retries", max)
+		message.Del("retry")
+
+		// TODO: Log that we upgraded to the new retry format?
+		// log.Info("Worker", "Upgraded legacy retry format", "jid", message.Jid(), "retry_enabled", retryEnabled, "max_retries", max)
+		// TODO: Add stats?
+		// stathat.Increment("memories.worker.job.retry.legacy_upgraded", 1)
 	}
 
 	count, _ := message.Get("retry_count").Int()
 
-	return retry && count < max
+	return retryEnabled && count < max
 }
 
 func incrementRetry(message *Msg) (retryCount int) {
 	retryCount = 0
+	now := time.Now().UTC().Format(LAYOUT)
 
+	// If retry_count hasn't been set, then this is our first failure so indicate it
 	if count, err := message.Get("retry_count").Int(); err != nil {
-		message.Set("failed_at", time.Now().UTC().Format(LAYOUT))
+		message.Set("failed_at", now)
 	} else {
-		message.Set("retried_at", time.Now().UTC().Format(LAYOUT))
+		message.Set("retried_at", now)
 		retryCount = count + 1
 	}
 
 	message.Set("retry_count", retryCount)
-
 	return
 }
 
