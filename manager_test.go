@@ -1,24 +1,38 @@
 package workers
 
 import (
-	"github.com/customerio/gospec"
+	"sync"
+
 	. "github.com/customerio/gospec"
 	"github.com/garyburd/redigo/redis"
 )
 
 type customMid struct {
+	sync.Mutex
 	Trace []string
 	Base  string
 }
 
 func (m *customMid) Call(queue string, message *Msg, next func() bool) (result bool) {
+	m.Lock()
 	m.Trace = append(m.Trace, m.Base+"1")
+	m.Unlock()
+
 	result = next()
+
+	m.Lock()
 	m.Trace = append(m.Trace, m.Base+"2")
+	m.Unlock()
 	return
 }
 
-func ManagerSpec(c gospec.Context) {
+func (m *customMid) TraceCopy() []string {
+	m.Lock()
+	defer m.Unlock()
+	return append([]string{}, m.Trace...)
+}
+
+func ManagerSpec(c Context) {
 	processed := make(chan *Args)
 
 	testJob := (func(message *Msg) {
@@ -50,7 +64,7 @@ func ManagerSpec(c gospec.Context) {
 		})
 
 		c.Specify("per-manager middlewares create separate middleware chains", func() {
-			mid1 := customMid{[]string{}, "0"}
+			mid1 := customMid{Trace: []string{}, Base: "0"}
 			manager := newManager("myqueue", testJob, 10, &mid1)
 			c.Expect(manager.mids, Not(Equals), Middleware)
 			c.Expect(len(manager.mids.actions), Equals, len(Middleware.actions)+1)
@@ -83,9 +97,9 @@ func ManagerSpec(c gospec.Context) {
 		})
 
 		c.Specify("per-manager middlwares are called separately, global middleware is called in each manager", func() {
-			mid1 := customMid{[]string{}, "1"}
-			mid2 := customMid{[]string{}, "2"}
-			mid3 := customMid{[]string{}, "3"}
+			mid1 := customMid{Trace: []string{}, Base: "1"}
+			mid2 := customMid{Trace: []string{}, Base: "2"}
+			mid3 := customMid{Trace: []string{}, Base: "3"}
 
 			oldMiddleware := Middleware
 			Middleware = NewMiddleware()
@@ -110,15 +124,15 @@ func ManagerSpec(c gospec.Context) {
 			Middleware = oldMiddleware
 
 			c.Expect(
-				arrayCompare(mid1.Trace, []string{"11", "12", "11", "12", "11", "12"}),
+				arrayCompare(mid1.TraceCopy(), []string{"11", "12", "11", "12", "11", "12"}),
 				IsTrue,
 			)
 			c.Expect(
-				arrayCompare(mid2.Trace, []string{"21", "22"}),
+				arrayCompare(mid2.TraceCopy(), []string{"21", "22"}),
 				IsTrue,
 			)
 			c.Expect(
-				arrayCompare(mid3.Trace, []string{"31", "32"}),
+				arrayCompare(mid3.TraceCopy(), []string{"31", "32"}),
 				IsTrue,
 			)
 
