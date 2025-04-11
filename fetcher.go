@@ -19,20 +19,19 @@ type Fetcher interface {
 }
 
 type fetch struct {
-	queue    string
-	processID  string
-	ready    chan bool
-	messages chan *Msg
-	stop     chan struct{}
-	exit     chan struct{}
-	closed   atomic.Bool
+	queue     string
+	processID string
+	ready     chan bool
+	messages  chan *Msg
+	stop      chan struct{}
+	exit      chan struct{}
+	closed    atomic.Bool
 }
 
-func NewFetch(queue string, processID string, messages chan *Msg, ready chan bool) Fetcher {
+func NewFetch(queue string, messages chan *Msg, ready chan bool) Fetcher {
 
 	return &fetch{
 		queue:    queue,
-		processID: processID,
 		ready:    ready,
 		messages: messages,
 		stop:     make(chan struct{}),
@@ -136,5 +135,5 @@ func (f *fetch) inprogressMessages() []string {
 }
 
 func (f *fetch) inprogressQueue() string {
-	return fmt.Sprint(f.queue, ":", f.processID, ":inprogress")
+	return fmt.Sprint(f.queue, ":", Config.processId, ":inprogress")
 }
