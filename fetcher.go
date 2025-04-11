@@ -19,13 +19,12 @@ type Fetcher interface {
 }
 
 type fetch struct {
-	queue     string
-	processID string
-	ready     chan bool
-	messages  chan *Msg
-	stop      chan struct{}
-	exit      chan struct{}
-	closed    atomic.Bool
+	queue    string
+	ready    chan bool
+	messages chan *Msg
+	stop     chan struct{}
+	exit     chan struct{}
+	closed   atomic.Bool
 }
 
 func NewFetch(queue string, messages chan *Msg, ready chan bool) Fetcher {
@@ -46,12 +45,30 @@ func (f *fetch) Queue() string {
 func (f *fetch) processOldMessages() {
 	messages := f.inprogressMessages()
 
-	for _, message := range messages {
+	for i, message := range messages {
 		select {
 		case <-f.stop:
 			return
 		case <-f.Ready():
-			f.sendMessage(message)
+			msg, err := NewMsg(message)
+			if err != nil {
+				Logger.Println("ERR: Couldn't parse old message:", err)
+				continue
+			}
+
+			if upgradeLegacyRetryFormatIfNeeded(msg) {
+				conn := Config.Pool.Get()
+				_, err := conn.Do("lset", f.inprogressQueue(), i, msg.ToJson())
+				conn.Close()
+
+				if err != nil {
+					Logger.Println("ERR: Failed to write upgraded retry format to Redis:", err)
+				} else {
+					Logger.Println("Upgraded legacy retry format for job", msg.Jid())
+				}
+			}
+
+			f.sendMessage(msg.ToJson())
 		}
 	}
 }
@@ -84,42 +101,12 @@ func (f *fetch) Fetch() {
 	}
 }
 
-func (f *fetch) sendMessage(raw string) {
-	msg, err := NewMsg(raw)
+func (f *fetch) sendMessage(message string) {
+	msg, err := NewMsg(message)
+
 	if err != nil {
-		Logger.Println("ERR: Couldn't create message from", raw, ":", err)
+		Logger.Println("ERR: Couldn't create message from", message, ":", err)
 		return
-	}
-
-	// Handle legacy format upgrade
-	if _, ok := msg.CheckGet("retry_enabled"); !ok {
-		oldRaw := msg.OriginalJson()
-		_ = retry(msg) // hack to convert
-
-		// Put updated message back onto queue
-		conn := Config.Pool.Get()
-		defer conn.Close()
-
-		// Find index of the original message
-		index := -1
-		items, _ := redis.Strings(conn.Do("lrange", f.inprogressQueue(), 0, -1))
-		for i, item := range items {
-			if item == oldRaw {
-				index = i
-				break
-			}
-		}
-
-		if index != -1 {
-			_, err := conn.Do("lset", f.inprogressQueue(), index, msg.ToJson())
-			if err != nil {
-				Logger.Println("ERR: Could not update legacy message in Redis:", err)
-			} else {
-				Logger.Println("Upgraded legacy retry format for job", msg.Jid())
-			}
-		} else {
-			Logger.Println("WARN: Could not find original message in queue for", msg.Jid())
-		}
 	}
 
 	f.Messages() <- msg
@@ -166,4 +153,30 @@ func (f *fetch) inprogressMessages() []string {
 
 func (f *fetch) inprogressQueue() string {
 	return fmt.Sprint(f.queue, ":", Config.processId, ":inprogress")
+}
+
+func upgradeLegacyRetryFormatIfNeeded(msg *Msg) (wasUpgraded bool) {
+	if _, ok := msg.CheckGet("retry_enabled"); ok {
+		// Already upgraded
+		return false
+	}
+
+	retryEnabled := false
+	max := DEFAULT_MAX_RETRY
+
+	if param, err := msg.Get("retry").Bool(); err == nil {
+		retryEnabled = param
+	} else if param, err := msg.Get("retry").Int(); err == nil {
+		retryEnabled = true
+		max = param
+	} else {
+		// Couldn't find legacy 'retry', don't upgrade
+		return false
+	}
+
+	// Upgrade to new format
+	msg.Set("retry_enabled", retryEnabled)
+	msg.Set("max_retries", max)
+	msg.Del("retry")
+	return true
 }
