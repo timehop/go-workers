@@ -73,6 +73,7 @@ func (f *fetch) processOldMessages() {
 	}
 }
 
+// TODO: Technically, we can just re-implement the Fetcher in the memories repo with this upgraded retry logic to simplify things?..
 func (f *fetch) Fetch() {
 	defer close(f.exit)
 
