@@ -84,12 +84,42 @@ func (f *fetch) Fetch() {
 	}
 }
 
-func (f *fetch) sendMessage(message string) {
-	msg, err := NewMsg(message)
-
+func (f *fetch) sendMessage(raw string) {
+	msg, err := NewMsg(raw)
 	if err != nil {
-		Logger.Println("ERR: Couldn't create message from", message, ":", err)
+		Logger.Println("ERR: Couldn't create message from", raw, ":", err)
 		return
+	}
+
+	// Handle legacy format upgrade
+	if _, ok := msg.CheckGet("retry_enabled"); !ok {
+		oldRaw := msg.OriginalJson()
+		_ = retry(msg) // hack to convert
+
+		// Put updated message back onto queue
+		conn := Config.Pool.Get()
+		defer conn.Close()
+
+		// Find index of the original message
+		index := -1
+		items, _ := redis.Strings(conn.Do("lrange", f.inprogressQueue(), 0, -1))
+		for i, item := range items {
+			if item == oldRaw {
+				index = i
+				break
+			}
+		}
+
+		if index != -1 {
+			_, err := conn.Do("lset", f.inprogressQueue(), index, msg.ToJson())
+			if err != nil {
+				Logger.Println("ERR: Could not update legacy message in Redis:", err)
+			} else {
+				Logger.Println("Upgraded legacy retry format for job", msg.Jid())
+			}
+		} else {
+			Logger.Println("WARN: Could not find original message in queue for", msg.Jid())
+		}
 	}
 
 	f.Messages() <- msg
